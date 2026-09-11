@@ -81,6 +81,24 @@ you follow up by phone.
    Search; a User/Page token with `pages_read_engagement` gets you more).
 3. Put it in `.env` as `FACEBOOK_ACCESS_TOKEN`.
 
+### Hunter.io API key (optional)
+A second, independent email lookup source `find_emails.py` tries when
+Facebook doesn't turn up an email.
+1. Sign up free at [hunter.io](https://hunter.io) -- the free plan includes
+   25 searches/month.
+2. Go to **API** in your dashboard and copy your API key.
+3. Put it in `.env` as `HUNTER_API_KEY`.
+
+**Important caveat:** Hunter's Domain Search needs an actual domain to look
+up, and `find_leads.py` only keeps businesses Google Places reports as
+having *no* website in the first place. In practice, Hunter can only help
+here when a domain shows up somewhere else -- currently, the lead's own
+Facebook page listing a website. For a business with no website and no
+domain anywhere, `phone_only` is still the correct, expected result -- not
+a bug. If you find most leads still end up `phone_only` even with both
+keys configured, that's the nature of targeting website-less businesses,
+not a misconfiguration.
+
 ### Sending email: Gmail App Password (default, `SEND_PROVIDER=smtp`)
 1. Turn on 2-Step Verification on the Gmail account you'll send from.
 2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
@@ -131,7 +149,8 @@ later).
   sending domain's reputation.
 - **Official APIs only**: lead discovery uses Google's Places API (New)
   Text Search + Place Details endpoints; email discovery uses the Facebook
-  Graph API. Neither script scrapes Google's or Facebook's HTML directly.
+  Graph API and Hunter.io's Domain Search API. No script scrapes Google's,
+  Facebook's, or any other site's HTML directly.
 - Subject lines are honest -- no misleading claims or fake reply threads.
 
 ## Error handling

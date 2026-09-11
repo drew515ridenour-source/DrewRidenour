@@ -132,6 +132,7 @@ def find_leads_for(api_key, category):
                 "google_maps_url": details.get("googleMapsUri", "").strip(),
                 "facebook_url": "",
                 "email": "",
+                "email_source": "",
                 "draft_email": "",
                 "status": "new",
             }

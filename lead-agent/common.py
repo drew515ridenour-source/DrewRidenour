@@ -46,6 +46,7 @@ LEADS_FIELDS = [
     "google_maps_url",
     "facebook_url",
     "email",
+    "email_source",  # "facebook" or "hunter" -- which lookup found this email
     "draft_email",
     "status",
 ]
