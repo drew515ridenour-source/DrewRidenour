@@ -81,23 +81,37 @@ you follow up by phone.
    Search; a User/Page token with `pages_read_engagement` gets you more).
 3. Put it in `.env` as `FACEBOOK_ACCESS_TOKEN`.
 
+### Serper.dev API key (optional)
+Domain discovery: when Facebook doesn't turn up a domain for a lead,
+`find_emails.py` runs one real Google search (via Serper's official Search
+API, not scraping) for the business name + address and looks at the top 3
+results for a plausible company domain (skipping directory/social sites
+like Yelp, Facebook, Yellow Pages, BBB, etc.).
+1. Sign up free at [serper.dev](https://serper.dev) -- the free tier is a
+   one-time allotment of 2,500 searches (not monthly).
+2. Copy your API key from the dashboard.
+3. Put it in `.env` as `SERPER_API_KEY`.
+
+`find_emails.py` prints a running count of Serper searches used each time
+it runs, so you can keep an eye on your remaining free-tier balance.
+
 ### Hunter.io API key (optional)
-A second, independent email lookup source `find_emails.py` tries when
-Facebook doesn't turn up an email.
+Once a domain is available for a lead -- from Facebook or from the Serper.dev
+step above -- `find_emails.py` looks it up via Hunter's Domain Search API for
+a contact email.
 1. Sign up free at [hunter.io](https://hunter.io) -- the free plan includes
    25 searches/month.
 2. Go to **API** in your dashboard and copy your API key.
 3. Put it in `.env` as `HUNTER_API_KEY`.
 
-**Important caveat:** Hunter's Domain Search needs an actual domain to look
-up, and `find_leads.py` only keeps businesses Google Places reports as
-having *no* website in the first place. In practice, Hunter can only help
-here when a domain shows up somewhere else -- currently, the lead's own
-Facebook page listing a website. For a business with no website and no
-domain anywhere, `phone_only` is still the correct, expected result -- not
-a bug. If you find most leads still end up `phone_only` even with both
-keys configured, that's the nature of targeting website-less businesses,
-not a misconfiguration.
+**Realistic outcome, not a bug:** even with Facebook, Serper.dev, and Hunter
+all configured, a business with genuinely zero web presence -- no domain,
+no directory listing, nothing Google has indexed -- will still correctly
+end up `phone_only`. Serper.dev meaningfully raises the email-found rate
+for leads that have *some* footprint (an old/dormant domain, a directory
+listing, a mention somewhere), not for every lead. If a lead has truly no
+online trace beyond its Google Places listing, `phone_only` is the right
+outcome, not a misconfiguration.
 
 ### Sending email: Gmail App Password (default, `SEND_PROVIDER=smtp`)
 1. Turn on 2-Step Verification on the Gmail account you'll send from.
@@ -149,8 +163,10 @@ later).
   sending domain's reputation.
 - **Official APIs only**: lead discovery uses Google's Places API (New)
   Text Search + Place Details endpoints; email discovery uses the Facebook
-  Graph API and Hunter.io's Domain Search API. No script scrapes Google's,
-  Facebook's, or any other site's HTML directly.
+  Graph API, Serper.dev's Search API (official, structured access to Google
+  search results -- used instead of scraping search result pages), and
+  Hunter.io's Domain Search API. No script scrapes Google's, Facebook's, or
+  any other site's HTML directly.
 - Subject lines are honest -- no misleading claims or fake reply threads.
 
 ## Error handling
