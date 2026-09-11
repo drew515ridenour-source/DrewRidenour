@@ -1,7 +1,7 @@
 """
 find_emails.py
 
-Step 2 of the pipeline: for each lead in leads.csv that has no email yet,
+Step 2 of the pipeline: for each lead in leads.xlsx that has no email yet,
 try to find a publicly-listed email address via the Facebook Graph API.
 
 COMPLIANCE NOTE: The spec's draft notes mention falling back to "a simple
@@ -38,7 +38,7 @@ from common import (
     STATUS_NEW,
     STATUS_PHONE_ONLY,
     read_leads,
-    write_leads,
+    update_lead_row,
 )
 
 FB_ACCESS_TOKEN_ENV = "FACEBOOK_ACCESS_TOKEN"
@@ -131,7 +131,7 @@ def run():
 
     leads = read_leads()
     if not leads:
-        print("No leads found in leads.csv -- run find_leads.py first.")
+        print("No leads found in leads.xlsx -- run find_leads.py first.")
         return
 
     updated = 0
@@ -142,22 +142,24 @@ def run():
         if access_token:
             print(f"Looking up Facebook page for: {lead['name']} ...")
             # Best-effort city hint for disambiguating search results --
-            # leads.csv stores a full address, not a separate city column.
+            # leads.xlsx stores a full address, not a separate city column.
             email = find_facebook_email(access_token, lead["name"], lead["address"])
             time.sleep(REQUEST_DELAY_SECONDS)
         else:
             email = None
 
         if email:
-            lead["email"] = email
-            lead["status"] = STATUS_EMAIL_FOUND
+            updates = {"email": email, "status": STATUS_EMAIL_FOUND}
             print(f"  found email: {email}")
         else:
-            lead["status"] = STATUS_PHONE_ONLY
+            updates = {"status": STATUS_PHONE_ONLY}
             print("  no public email found -- marked phone_only")
+
+        # Save after each row, not just at the end, so an interrupted run
+        # doesn't lose the lookups already done.
+        update_lead_row(lead["name"], lead["phone"], updates)
         updated += 1
 
-    write_leads(leads)
     print(f"\nDone. Processed {updated} lead(s) without an email.")
 
 

@@ -1,19 +1,20 @@
 """
 find_leads.py
 
-Step 1 of the pipeline: find local businesses in a given (category, city)
+Step 1 of the pipeline: find local businesses in a configured search area
 that do NOT currently have a website, using the Google Places API (New).
 
 Usage:
     python find_leads.py
 
-Edit SEARCHES below (or import find_leads and call run(searches)) to change
-which categories/cities are searched.
+Edit CATEGORIES in config.py to change what kinds of businesses are
+searched. Edit SEARCH_CENTER_LAT / SEARCH_CENTER_LNG / SEARCH_RADIUS_METERS
+in .env to change *where* -- no code changes needed to move to a new city
+or widen/narrow the search radius. See README.md for how to find lat/lng
+for a new city.
 
-COMPLIANCE NOTE: this script only talks to Google's official Places API
-endpoints (Text Search + Place Details) over HTTPS with an API key. It does
-not scrape Google's HTML search results, which would violate Google's
-Terms of Service.
+Each lead found is written to leads.xlsx immediately (not batched at the
+end), so an interrupted run doesn't lose progress.
 """
 
 import sys
@@ -21,12 +22,13 @@ import time
 
 import requests
 
-from common import (
-    LEADS_FIELDS,
-    dedup_key,
-    read_leads,
-    require_env,
-    write_leads,
+from common import append_lead_row, dedup_key, existing_dedup_keys, require_env
+from config import (
+    CATEGORIES,
+    SEARCH_CENTER_LAT,
+    SEARCH_CENTER_LNG,
+    SEARCH_LOCATION_MODE,
+    SEARCH_RADIUS_METERS,
 )
 
 PLACES_API_KEY_ENV = "GOOGLE_PLACES_API_KEY"
@@ -45,14 +47,16 @@ DETAILS_FIELD_MASK = "displayName,formattedAddress,nationalPhoneNumber,websiteUr
 # rate limits, not to evade anything -- just good citizenship on a shared API.
 DETAILS_DELAY_SECONDS = 0.2
 
-# (category, "City, ST") pairs to search. Iowa City first per the business
-# context in the spec; add more rows as you expand to other cities/categories.
-SEARCHES = [
-    ("auto repair", "Iowa City, IA"),
-    ("hair salon", "Iowa City, IA"),
-]
-
 MAX_PAGES_PER_SEARCH = 3  # Text Search (New) returns up to 20 results/page
+
+
+def _location_circle():
+    return {
+        "circle": {
+            "center": {"latitude": SEARCH_CENTER_LAT, "longitude": SEARCH_CENTER_LNG},
+            "radius": SEARCH_RADIUS_METERS,
+        }
+    }
 
 
 def text_search(api_key, query, page_token=None):
@@ -62,6 +66,15 @@ def text_search(api_key, query, page_token=None):
         "X-Goog-FieldMask": TEXT_SEARCH_FIELD_MASK,
     }
     body = {"textQuery": query}
+
+    # locationRestriction is a hard cutoff (results outside the circle are
+    # excluded); locationBias is a soft preference. Configurable via
+    # SEARCH_LOCATION_MODE in .env -- see config.py.
+    if SEARCH_LOCATION_MODE == "restriction":
+        body["locationRestriction"] = _location_circle()
+    else:
+        body["locationBias"] = _location_circle()
+
     if page_token:
         body["pageToken"] = page_token
     resp = requests.post(TEXT_SEARCH_URL, headers=headers, json=body, timeout=30)
@@ -85,14 +98,13 @@ def place_details(api_key, place_id):
     return resp.json()
 
 
-def find_leads_for(api_key, category, city):
-    """Yield lead dicts for one (category, city) search that lack a website."""
-    query = f"{category} in {city}"
+def find_leads_for(api_key, category):
+    """Yield lead dicts for one category search that lack a website."""
     page_token = None
     pages_fetched = 0
 
     while True:
-        places, next_token = text_search(api_key, query, page_token)
+        places, next_token = text_search(api_key, category, page_token)
         pages_fetched += 1
 
         for place in places:
@@ -131,30 +143,35 @@ def find_leads_for(api_key, category, city):
         time.sleep(2)
 
 
-def run(searches):
+def run(categories):
     import os
 
     require_env(PLACES_API_KEY_ENV)
     api_key = os.environ[PLACES_API_KEY_ENV]
 
-    existing = read_leads()
-    seen = {dedup_key(row["name"], row["phone"]) for row in existing}
-
+    seen = existing_dedup_keys()
     added = 0
-    for category, city in searches:
-        print(f"Searching: {category!r} in {city!r} ...")
-        for lead in find_leads_for(api_key, category, city):
+
+    print(
+        f"Searching within {SEARCH_RADIUS_METERS:.0f}m of "
+        f"({SEARCH_CENTER_LAT}, {SEARCH_CENTER_LNG}) [{SEARCH_LOCATION_MODE}] ...\n"
+    )
+
+    for category in categories:
+        print(f"Searching category: {category!r} ...")
+        for lead in find_leads_for(api_key, category):
             key = dedup_key(lead["name"], lead["phone"])
             if key in seen:
                 continue
             seen.add(key)
-            existing.append(lead)
+            # Write immediately -- a long run that gets interrupted partway
+            # through shouldn't lose the leads already found.
+            append_lead_row(lead)
             added += 1
             print(f"  + {lead['name']} ({lead['phone'] or 'no phone'}) -- no website found")
 
-    write_leads(existing)
-    print(f"\nDone. Added {added} new lead(s). Total leads in leads.csv: {len(existing)}")
+    print(f"\nDone. Added {added} new lead(s) to leads.xlsx.")
 
 
 if __name__ == "__main__":
-    run(SEARCHES)
+    run(CATEGORIES)

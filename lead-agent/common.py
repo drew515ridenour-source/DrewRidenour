@@ -2,15 +2,23 @@
 Shared helpers used across the lead-gen pipeline scripts:
 find_leads.py -> find_emails.py -> generate_emails.py -> review_emails.py -> send_emails.py
 
-Keeping this logic in one place means every script agrees on the CSV schema,
-loads config the same way, and fails the same way when a required API key
-is missing.
+Keeping this logic in one place means every script agrees on the workbook
+schema, loads config the same way, and fails the same way when a required
+API key is missing.
+
+Leads live in `leads.xlsx` (an Excel workbook, via openpyxl) so they're easy
+to open, sort, and eyeball outside the pipeline. `send_log.csv` stays plain
+CSV -- it's an append-only log, not a working dataset, so a spreadsheet
+buys nothing there.
 """
 
 import csv
 import os
 import sys
 from pathlib import Path
+
+import openpyxl
+from openpyxl.styles import Font
 
 # Loading .env is optional at import time (a shell env can supply the same
 # vars) but we try it so `python find_leads.py` works out of the box.
@@ -22,11 +30,13 @@ except ImportError:
     pass
 
 BASE_DIR = Path(__file__).resolve().parent
-LEADS_CSV = BASE_DIR / "leads.csv"
+LEADS_XLSX = BASE_DIR / "leads.xlsx"
 SEND_LOG_CSV = BASE_DIR / "send_log.csv"
 
-# Canonical column order for leads.csv. Every script reads/writes this exact
-# shape so a partially-completed row from an earlier step never gets
+SHEET_NAME = "Leads"
+
+# Canonical column order for leads.xlsx. Every script reads/writes this
+# exact shape so a partially-completed row from an earlier step never gets
 # silently dropped or reordered.
 LEADS_FIELDS = [
     "name",
@@ -78,38 +88,137 @@ def require_env(*names):
         sys.exit(1)
 
 
+# --------------------------------------------------------------------------
+# leads.xlsx helpers
+#
+# Every write here re-saves the whole workbook. That's the simplest way to
+# guarantee formatting (bold header, frozen header row, auto-width columns)
+# stays correct after every mutation, and openpyxl loads the whole file into
+# memory on open regardless -- for a local lead list (tens/hundreds of rows,
+# not millions) the cost is negligible next to an API round-trip.
+# --------------------------------------------------------------------------
+
+
+def _format_header(ws):
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+
+
+def _autofit_columns(ws):
+    widths = {}
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is None:
+                continue
+            widths[cell.column_letter] = max(widths.get(cell.column_letter, 0), len(str(cell.value)))
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = min(max(width + 2, 10), 60)
+
+
+def _new_workbook():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = SHEET_NAME
+    ws.append(LEADS_FIELDS)
+    _format_header(ws)
+    return wb, ws
+
+
+def _load_or_create_workbook():
+    if LEADS_XLSX.exists():
+        wb = openpyxl.load_workbook(LEADS_XLSX)
+        ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
+        return wb, ws
+    return _new_workbook()
+
+
 def read_leads():
-    """Return leads.csv as a list of dicts, normalized to LEADS_FIELDS."""
-    if not LEADS_CSV.exists():
+    """Return leads.xlsx as a list of dicts, normalized to LEADS_FIELDS."""
+    if not LEADS_XLSX.exists():
         return []
-    with open(LEADS_CSV, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    normalized = []
-    for row in rows:
-        normalized.append({field: row.get(field, "") or "" for field in LEADS_FIELDS})
-    return normalized
+    wb = openpyxl.load_workbook(LEADS_XLSX)
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
+    header = [cell.value for cell in ws[1]]
+
+    rows = []
+    for raw_row in ws.iter_rows(min_row=2, values_only=True):
+        if raw_row is None or all(v is None or str(v).strip() == "" for v in raw_row):
+            continue  # skip blank trailing rows
+        row_dict = dict(zip(header, raw_row))
+        rows.append({field: (row_dict.get(field) or "") for field in LEADS_FIELDS})
+    return rows
 
 
 def write_leads(rows):
-    """Overwrite leads.csv with `rows` (list of dicts), in canonical column order."""
-    with open(LEADS_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=LEADS_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") or "" for field in LEADS_FIELDS})
+    """Overwrite leads.xlsx with `rows` (list of dicts), in canonical column order."""
+    wb, ws = _new_workbook()
+    for row in rows:
+        ws.append([row.get(field, "") or "" for field in LEADS_FIELDS])
+    _autofit_columns(ws)
+    wb.save(LEADS_XLSX)
+
+
+def append_lead_row(row):
+    """
+    Append a single new lead to leads.xlsx immediately (creating the
+    workbook if needed) and save. Used by find_leads.py so a long search
+    run doesn't lose progress if it's interrupted partway through.
+    """
+    wb, ws = _load_or_create_workbook()
+    ws.append([row.get(field, "") or "" for field in LEADS_FIELDS])
+    _autofit_columns(ws)
+    wb.save(LEADS_XLSX)
+
+
+def update_lead_row(name, phone, updates):
+    """
+    Find the row matching the (name, phone) dedup key and merge `updates`
+    (a dict of field -> value) into it in place, saving immediately. Used
+    by find_emails.py so each resolved lead is persisted as it's processed,
+    not just at the end of the run. Returns True if a matching row was found.
+    """
+    wb, ws = _load_or_create_workbook()
+    header = [cell.value for cell in ws[1]]
+    if "name" not in header or "phone" not in header:
+        return False
+    name_idx = header.index("name")
+    phone_idx = header.index("phone")
+    target_key = dedup_key(name, phone)
+
+    for row in ws.iter_rows(min_row=2):
+        row_key = dedup_key(row[name_idx].value, row[phone_idx].value)
+        if row_key == target_key:
+            for field, value in updates.items():
+                if field in header:
+                    row[header.index(field)].value = value
+            _autofit_columns(ws)
+            wb.save(LEADS_XLSX)
+            return True
+    return False
+
+
+def existing_dedup_keys():
+    """(name, phone) keys already present in leads.xlsx, for dedup in find_leads.py."""
+    return {dedup_key(row["name"], row["phone"]) for row in read_leads()}
 
 
 def normalize_phone(phone):
     """Digits-only phone number, used as part of the dedup key."""
-    return "".join(ch for ch in (phone or "") if ch.isdigit())
+    return "".join(ch for ch in str(phone or "") if ch.isdigit())
 
 
 def normalize_name(name):
-    return (name or "").strip().lower()
+    return str(name or "").strip().lower()
 
 
 def dedup_key(name, phone):
     return (normalize_name(name), normalize_phone(phone))
+
+
+# --------------------------------------------------------------------------
+# send_log.csv helpers (plain CSV, append-only)
+# --------------------------------------------------------------------------
 
 
 def append_send_log(timestamp, recipient, business_name, status, message=""):

@@ -12,12 +12,24 @@ find_leads.py  -->  find_emails.py  -->  generate_emails.py  -->  review_emails.
  (Google Places)     (Facebook Graph)     (Anthropic API)         (manual approval)      (SMTP/SendGrid/Mailgun)
 ```
 
-Everything is stored in `leads.csv`, one row per business, with a `status`
+Everything is stored in `leads.xlsx`, one row per business, with a `status`
 column that advances as it moves through the pipeline:
 
 `new` -> `phone_only` / `email_found` -> `drafted` -> `ready_to_send` / `skipped` -> `sent` / `send_failed`
 
-Every send is also logged to `send_log.csv`.
+`leads.xlsx` is a real Excel workbook (via `openpyxl`) -- open it directly to
+sort, filter, or eyeball your leads. It's created automatically the first
+time you run `find_leads.py` (bold header row, frozen so it stays visible
+while you scroll, auto-widened columns), and it is **not** committed to git
+-- it's generated locally and will contain real business contact info once
+you start running the pipeline.
+
+`find_leads.py` and `find_emails.py` write to `leads.xlsx` **as they go**
+(one row at a time), not just at the end -- so if a long search run gets
+interrupted partway through, the leads already found are already saved.
+
+Every send is also logged to `send_log.csv` (a plain append-only CSV log,
+not a working dataset, so it stays CSV).
 
 ## 1. Setup
 
@@ -39,6 +51,21 @@ Then fill in `.env`:
 5. Put it in `.env` as `GOOGLE_PLACES_API_KEY`.
 6. Note: Places API usage is billed by Google after a monthly free credit --
    check current pricing before running large searches.
+
+### Search area (required, defaults to Iowa City)
+`find_leads.py` searches a circle defined by `SEARCH_CENTER_LAT` /
+`SEARCH_CENTER_LNG` / `SEARCH_RADIUS_METERS` in `.env` -- change these to
+move the search to a new city or resize the radius, no code changes needed.
+- To find lat/lng for a new city: search "`[city name] coordinates`" on
+  Google, or use [latlong.net](https://www.latlong.net).
+- Radius is in **meters**: `8000` ≈ 5 miles, `16000` ≈ 10 miles.
+- `SEARCH_LOCATION_MODE` controls how strict the radius is:
+  - `bias` (default) -- a soft preference; Google may still return a
+    strong match just outside the circle.
+  - `restriction` -- a hard cutoff; anything outside the circle is
+    excluded entirely.
+- To change *what* categories are searched (not just where), edit the
+  `CATEGORIES` list in `config.py`.
 
 ### Anthropic API key (required)
 1. Create an account at [console.anthropic.com](https://console.anthropic.com/).
@@ -76,16 +103,18 @@ email's footer automatically).
 ## 2. Run the pipeline, in order
 
 ```bash
-python find_leads.py       # 1. discover leads with no website -> leads.csv
+python find_leads.py       # 1. discover leads with no website -> leads.xlsx
 python find_emails.py      # 2. try to find a public email for each lead
 python generate_emails.py  # 3. draft a personalized outreach email per lead
 python review_emails.py    # 4. YOU approve / edit / skip each draft
 python send_emails.py      # 5. send only approved (ready_to_send) leads
 ```
 
-Edit the `SEARCHES` list at the top of `find_leads.py` to change which
-`(category, city)` pairs to search -- it defaults to `auto repair` and
-`hair salon` in Iowa City, IA.
+Edit `CATEGORIES` in `config.py` to change what kinds of businesses are
+searched (defaults to auto repair, hair salon, tire shop, dentist, and
+restaurant). Edit `SEARCH_CENTER_LAT` / `SEARCH_CENTER_LNG` /
+`SEARCH_RADIUS_METERS` in `.env` to change *where* -- see "Search area"
+above.
 
 Each script is safe to re-run: leads already past a given stage are left
 alone (e.g. re-running `find_leads.py` won't duplicate existing rows, and

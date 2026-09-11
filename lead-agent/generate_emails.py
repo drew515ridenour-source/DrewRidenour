@@ -86,7 +86,7 @@ def run():
 
     leads = read_leads()
     if not leads:
-        print("No leads found in leads.csv -- run find_leads.py and find_emails.py first.")
+        print("No leads found in leads.xlsx -- run find_leads.py and find_emails.py first.")
         return
 
     drafted = 0

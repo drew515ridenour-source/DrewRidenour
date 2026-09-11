@@ -5,7 +5,7 @@ Step 4 of the pipeline (manual review, spec section 4): print each drafted
 email one at a time and let a human approve, edit, or skip it before it's
 eligible for sending. Nothing is ever sent automatically -- send_emails.py
 only sends leads whose status is `ready_to_send`, which only this script
-(or a human editing the CSV directly) can set.
+(or a human editing leads.xlsx directly) can set.
 
 Usage:
     python review_emails.py
